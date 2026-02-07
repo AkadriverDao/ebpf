@@ -2,29 +2,6 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
-// clang -O2 -g -target bpf -D__TARGET_ARCH_arm64 \
-//       -I/usr/include/aarch64-linux-gnu \
-//       -c openat.bpf.c -o openat.bpf.o
-
-// clang -O2 -g -target bpf -D__TARGET_ARCH_arm64 \
-//       -I/usr/include/aarch64-linux-gnu \
-//       -c openat.bpf.c -o openat_watch.bpf.o
-
-// 根据你刚才提供的 format 手动定义结构体
-// struct openat_args {
-//     unsigned short common_type;
-//     unsigned char common_flags;
-//     unsigned char common_preempt_count;
-//     int common_pid;
-//     int __syscall_nr;
-    
-//     // 注意：根据 format，这里从 offset 12 到 16 之间有 4 字节空隙（padding）
-//     // 或者直接按照 offset 16 开始定义字段
-//     long dfd;               // offset 16
-//     const char *filename;   // offset 24
-//     long flags;             // offset 32
-//     long mode;              // offset 40
-// };
 
 // SEC("tracepoint/syscalls/sys_enter_openat")
 // int bpf_trace_openat(struct trace_event_raw_sys_enter *ctx)
@@ -50,7 +27,8 @@
 //     return 0;
 // }
 
-// char _license[] SEC("license") = "GPL";
+#define BPF_TAG "TASK_BPF"
+
 
 SEC("kprobe/do_sys_openat2")
 int BPF_KPROBE(kprobe_do_sys_openat2, int dfd, const char *filename, struct open_how *how)
@@ -58,25 +36,51 @@ int BPF_KPROBE(kprobe_do_sys_openat2, int dfd, const char *filename, struct open
     char fname[128];
     u32 pid = bpf_get_current_pid_tgid() >> 32;
 
-    // --- 关键的判空开始 ---
-    // 告诉验证器：如果 filename 是 NULL，我们立刻退出，不进行后续内存读取
     if (filename == NULL) {
         return 0; 
     }
-    // --- 关键的判空结束 ---
 
-    // 此时验证器知道 filename 不为 0，才允许你调用辅助函数
     long res = bpf_probe_read_user_str(fname, sizeof(fname), filename);
 
     if (res > 0) {
-        // 获取进程名用于展示
         char comm[16];
         bpf_get_current_comm(&comm, sizeof(comm));
-        
-        bpf_printk("WATCH: PID %d [%s] Open: %s", pid, comm, fname);
+        bpf_printk(BPF_TAG  ": PID %d [%s] Open: %s", pid, comm, fname);
     }
 
     return 0;
 }
 
+SEC("kprobe/vfs_read")
+int BPF_KPROBE(kprobe_vfs_read, struct file *file, char *buf, size_t size, loff_t *offset) 
+{
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    if (pid == 0) return 0;
+
+    if (!file) return 0;
+
+    struct dentry *de = BPF_CORE_READ(file, f_path.dentry);
+    if (!de) return 0;
+
+    const unsigned char *n_ptr = BPF_CORE_READ(de, d_name.name);
+    if (!n_ptr) return 0;
+
+    char filename[64];
+    __builtin_memset(filename, 0, sizeof(filename));
+    
+    long len = bpf_probe_read_kernel_str(filename, sizeof(filename), n_ptr);
+    if (len <= 0) return 0;
+
+    // 3. 读取 inode 属性
+    struct inode *in = BPF_CORE_READ(file, f_inode);
+    if (!in) return 0;
+    long long f_size = BPF_CORE_READ(in, i_size);
+
+    if(f_size != 0) {
+        bpf_printk(BPF_TAG "vfs_read: %s | sz: %lld | req: %lu\n",
+               filename, (long long)f_size, (unsigned long)size);
+    }
+
+    return 0;
+}
 char _license[] SEC("license") = "GPL";
