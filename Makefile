@@ -36,13 +36,13 @@ load: $(BPF_OBJ)
 	@echo "清理旧的挂载点..."
 	@rm -f $(BPF_FS_PATH)
 	@echo "加载并挂载 BPF 程序..."
-	$(BPFTOOL) prog load $(BPF_OBJ) $(BPF_FS_PATH) autoattach
+	$(BPFTOOL) prog loadall $(BPF_OBJ) $(BPF_FS_PATH) autoattach
 	@echo "加载成功！挂载点: $(BPF_FS_PATH)"
 
 # 一键卸载
 unload:
 	@echo "正在卸载 BPF 程序..."
-	@rm -f $(BPF_FS_PATH)
+	@rm -rf $(BPF_FS_PATH)
 	@echo "卸载完成。"
 
 # 查看实时日志

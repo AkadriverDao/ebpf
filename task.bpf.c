@@ -2,6 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_endian.h>
 
 // SEC("tracepoint/syscalls/sys_enter_openat")
 // int bpf_trace_openat(struct trace_event_raw_sys_enter *ctx)
@@ -30,26 +31,26 @@
 #define BPF_TAG "TASK_BPF"
 
 
-SEC("kprobe/do_sys_openat2")
-int BPF_KPROBE(kprobe_do_sys_openat2, int dfd, const char *filename, struct open_how *how)
-{
-    char fname[128];
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
+// SEC("kprobe/do_sys_openat2")
+// int BPF_KPROBE(kprobe_do_sys_openat2, int dfd, const char *filename, struct open_how *how)
+// {
+//     char fname[128];
+//     u32 pid = bpf_get_current_pid_tgid() >> 32;
 
-    if (filename == NULL) {
-        return 0; 
-    }
+//     if (filename == NULL) {
+//         return 0; 
+//     }
 
-    long res = bpf_probe_read_user_str(fname, sizeof(fname), filename);
+//     long res = bpf_probe_read_user_str(fname, sizeof(fname), filename);
 
-    if (res > 0) {
-        char comm[16];
-        bpf_get_current_comm(&comm, sizeof(comm));
-        bpf_printk(BPF_TAG  ": PID %d [%s] Open: %s", pid, comm, fname);
-    }
+//     if (res > 0) {
+//         char comm[16];
+//         bpf_get_current_comm(&comm, sizeof(comm));
+//         bpf_printk(BPF_TAG  ": PID %d [%s] Open: %s", pid, comm, fname);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
 SEC("kprobe/vfs_read")
 int BPF_KPROBE(kprobe_vfs_read, struct file *file, char *buf, size_t size, loff_t *offset) 
@@ -76,11 +77,49 @@ int BPF_KPROBE(kprobe_vfs_read, struct file *file, char *buf, size_t size, loff_
     if (!in) return 0;
     long long f_size = BPF_CORE_READ(in, i_size);
 
-    if(f_size != 0) {
-        bpf_printk(BPF_TAG "vfs_read: %s | sz: %lld | req: %lu\n",
-               filename, (long long)f_size, (unsigned long)size);
-    }
+    // if(f_size != 0) {
+    //     bpf_printk(BPF_TAG "vfs_read: %s | sz: %lld | req: %lu\n",
+    //            filename, (long long)f_size, (unsigned long)size);
+    // }
 
     return 0;
 }
+
+SEC("kprobe/tcp_v4_connect")
+int BPF_KPROBE(kprobe_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr, int addr_len)
+{
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    if (pid == 0) return 0;
+
+    if (!uaddr) return 0;
+
+
+    unsigned short family = 0;
+    if (bpf_probe_read_user(&family, sizeof(family), &uaddr->sa_family) != 0) {
+        if(bpf_probe_read_kernel(&family, sizeof(family), &uaddr->sa_family) != 0) {
+            bpf_printk(BPF_TAG " tcpv %u", family);
+            return 0;
+        }
+    }
+
+    if (family != 2) return 0;
+    struct sockaddr_in uservaddr;
+    __builtin_memset(&uservaddr, 0, sizeof(uservaddr));
+
+    if (bpf_probe_read_kernel(&uservaddr, sizeof(uservaddr), uaddr) != 0) {
+        return 0;
+    }
+
+    u32 daddr = uservaddr.sin_addr.s_addr;
+    u16 dport = uservaddr.sin_port;
+
+
+    char comm[16];
+    bpf_get_current_comm(&comm, sizeof(comm));
+    bpf_printk(BPF_TAG ": [%s] PID:%d Connect -> %pI4:%u\n", 
+               comm, pid, &daddr, bpf_ntohs(dport));
+
+    return 0;
+}
+
 char _license[] SEC("license") = "GPL";
