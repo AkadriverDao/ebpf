@@ -122,4 +122,26 @@ int BPF_KPROBE(kprobe_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr, i
     return 0;
 }
 
+SEC("kprobe/submit_bio")
+int BPF_KPROBE(submit_bio_entry, struct bio *bio)
+{
+    if(bio == NULL) return 0;
+    char comm[16];
+    bpf_get_current_comm(&comm, sizeof(comm));
+    u32 opf = BPF_CORE_READ(bio, bi_opf);
+    u32 op_code = opf & 0xff; // 获取低位操作码
+
+    if (op_code == 0)
+        bpf_printk(BPF_TAG " %s submit_bio READ",comm);
+    else if (op_code == 1)
+        bpf_printk(BPF_TAG " %s submit_bio WRITE", comm);
+    else if (op_code == 3)
+        bpf_printk(BPF_TAG " %s submit_bio DISCARD", comm);
+    else if (op_code == 9)
+        bpf_printk(BPF_TAG " %s submit_bio FLUSH", comm);
+    else
+        bpf_printk(BPF_TAG " %s submit_bio UNKNOWN:%u", comm, op_code);
+    return 0;
+}
+
 char _license[] SEC("license") = "GPL";
